@@ -1,10 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 
-pub fn assert_stable_mappings<T, U, const N: usize>(
-    actual: [(T, U); N],
-    expected: [(T, U); N],
-) where
+pub fn assert_stable_mappings<T, U, const N: usize>(actual: [(T, U); N], expected: [(T, U); N])
+where
     T: Debug + Eq,
     U: Debug + Eq,
 {
