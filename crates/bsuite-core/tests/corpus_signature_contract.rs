@@ -1,11 +1,21 @@
 mod common;
 
+use base64::Engine;
 use bsuite_core::{
     BsuiteCoreError, CorpusEntry, CorpusFile, CorpusResolver, ProvenanceRecord, RoutingKey,
     corpus::canonical_payload_bytes,
 };
 use common::{corpus_entry, corpus_file, corpus_signing_key, signed_toml, single_entry_corpus};
 use ed25519_dalek::VerifyingKey;
+
+const ED25519_BASEPOINT_COMPRESSED: [u8; 32] = [
+    0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+];
+
+const ED25519_IDENTITY_COMPRESSED: [u8; 32] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
 
 fn canonical_string(corpus: &CorpusFile) -> String {
     String::from_utf8(canonical_payload_bytes(corpus).expect("canonical payload"))
@@ -81,6 +91,44 @@ fn signature_rejects_every_signed_payload_field_tamper() {
 
         assert_eq!(error, BsuiteCoreError::CorpusSignatureInvalid, "{name}");
     }
+}
+
+fn basepoint_signature_with_scalar_one() -> [u8; 64] {
+    let mut signature_bytes = [0_u8; 64];
+    signature_bytes[..32].copy_from_slice(&ED25519_BASEPOINT_COMPRESSED);
+    signature_bytes[32] = 1;
+    signature_bytes
+}
+
+fn identity_weak_verifying_key() -> VerifyingKey {
+    let weak_key = VerifyingKey::from_bytes(&ED25519_IDENTITY_COMPRESSED)
+        .expect("identity encoding is a recognized weak verifying key");
+    assert!(weak_key.is_weak());
+    weak_key
+}
+
+fn corpus_toml_with_signature(signature_bytes: [u8; 64]) -> String {
+    let mut corpus = single_entry_corpus(RoutingKey::BGround);
+    corpus.signature = format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(signature_bytes)
+    );
+    toml::to_string(&corpus).expect("corpus encodes as TOML")
+}
+
+fn assert_signed_corpus_rejected(toml: &str, pubkey: &VerifyingKey) {
+    let error = CorpusResolver::from_toml_signed(toml, pubkey)
+        .expect_err("strict signed corpus acceptance must reject invalid verifier states");
+
+    assert_eq!(error, BsuiteCoreError::CorpusSignatureInvalid);
+}
+
+#[test]
+fn strict_verification_rejects_low_order_public_key_acceptance() {
+    let weak_key = identity_weak_verifying_key();
+    let toml = corpus_toml_with_signature(basepoint_signature_with_scalar_one());
+
+    assert_signed_corpus_rejected(&toml, &weak_key);
 }
 
 #[test]

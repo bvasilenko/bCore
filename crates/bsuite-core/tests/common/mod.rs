@@ -100,3 +100,138 @@ pub fn signed_resolver(corpus: CorpusFile) -> CorpusResolver {
     CorpusResolver::from_toml_signed(&toml, &(&signing_key).into())
         .expect("test corpus signature verifies")
 }
+
+use bsuite_core::{PlatformArtefact, PlatformId, SignedManifest};
+use chrono::{TimeZone, Utc};
+use ed25519_dalek::VerifyingKey;
+use semver::Version;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::io::Cursor;
+
+pub fn manifest_signing_key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes(&[seed; 32])
+}
+
+pub fn trust_bundle(key_id: &str, key: &SigningKey) -> String {
+    trust_bundle_with_dates(
+        key_id,
+        key,
+        "2020-01-01T00:00:00Z",
+        "2099-01-01T00:00:00Z",
+        None,
+    )
+}
+
+pub fn trust_bundle_with_dates(
+    key_id: &str,
+    key: &SigningKey,
+    valid_from: &str,
+    valid_until: &str,
+    revoked_at: Option<&str>,
+) -> String {
+    let public_key = VerifyingKey::from(key);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(public_key.as_bytes());
+    let revoked = revoked_at
+        .map(|value| format!("revoked_at = \"{value}\"\n"))
+        .unwrap_or_default();
+    format!(
+        r#"[[keys]]
+key_id = "{key_id}"
+verifying_key_base64 = "{encoded}"
+valid_from = "{valid_from}"
+valid_until = "{valid_until}"
+{revoked}"#
+    )
+}
+
+pub fn signed_manifest(
+    version: &str,
+    key_id: &str,
+    platform: PlatformId,
+    archive_url: String,
+    archive_sha256: String,
+) -> SignedManifest {
+    let mut platforms = HashMap::new();
+    platforms.insert(
+        platform.key().to_string(),
+        PlatformArtefact {
+            archive_url,
+            sha256: archive_sha256,
+        },
+    );
+
+    SignedManifest {
+        schema_version: 1,
+        binary_name: "bground".to_string(),
+        version: Version::parse(version).unwrap(),
+        release_at: Utc.with_ymd_and_hms(2026, 6, 13, 0, 0, 0).unwrap(),
+        platforms,
+        corpus_version: 2,
+        obfuscation_tier: "test".to_string(),
+        signing_key_id: key_id.to_string(),
+    }
+}
+
+pub fn manifest_signature(manifest: &SignedManifest, key: &SigningKey) -> String {
+    let payload = serde_json_canonicalizer::to_vec(manifest).unwrap();
+    let signature = key.sign(&payload);
+    format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+    )
+}
+
+pub fn executable_name(platform: PlatformId) -> &'static str {
+    match platform {
+        PlatformId::WindowsX86_64 => "bground.exe",
+        _ => "bground",
+    }
+}
+
+pub fn tar_with_file(path: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut output);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, Cursor::new(bytes))
+            .unwrap();
+        builder.finish().unwrap();
+    }
+    output
+}
+
+pub fn raw_tar_with_unchecked_path(path: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut header = [0_u8; 512];
+    let path_bytes = path.as_bytes();
+    header[..path_bytes.len()].copy_from_slice(path_bytes);
+    header[100..108].copy_from_slice(b"0000755\0");
+    header[108..116].copy_from_slice(b"0000000\0");
+    header[116..124].copy_from_slice(b"0000000\0");
+    let size = format!("{:011o}\0", bytes.len());
+    header[124..136].copy_from_slice(size.as_bytes());
+    header[136..148].copy_from_slice(b"00000000000\0");
+    header[148..156].fill(b' ');
+    header[156] = b'0';
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+    let checksum = format!("{:06o}\0 ", checksum);
+    header[148..156].copy_from_slice(checksum.as_bytes());
+
+    let mut output = Vec::new();
+    output.extend_from_slice(&header);
+    output.extend_from_slice(bytes);
+    let padding = (512 - (bytes.len() % 512)) % 512;
+    output.extend(std::iter::repeat_n(0, padding));
+    output.extend_from_slice(&[0_u8; 1024]);
+    output
+}
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}

@@ -1,6 +1,6 @@
 use crate::{BsuiteCoreError, RoutingKey};
 use base64::Engine;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 pub const CORPUS_SCHEMA_VERSION: u32 = 1;
@@ -80,7 +80,7 @@ fn verify_corpus_signature(
     let signed_payload = canonical_payload_bytes(corpus)?;
 
     pubkey
-        .verify(&signed_payload, &signature)
+        .verify_strict(&signed_payload, &signature)
         .map_err(|_| BsuiteCoreError::CorpusSignatureInvalid)
 }
 

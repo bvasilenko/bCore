@@ -39,10 +39,51 @@ pub trait PromptResolver {
 
 #[derive(Debug, Clone)]
 pub struct CorpusResolver {
-    entries: HashMap<RoutingKey, Vec<CorpusEntry>>,
+    entries: CorpusEntryIndex,
     schema_version: u32,
     canonical_key_id: String,
-    entry_count: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CorpusEntryIndex {
+    by_routing_key: HashMap<RoutingKey, Vec<CorpusEntry>>,
+    total_entries: usize,
+}
+
+impl CorpusEntryIndex {
+    fn from_entries(entries: Vec<CorpusEntry>) -> Self {
+        let total_entries = entries.len();
+        let mut by_routing_key: HashMap<RoutingKey, Vec<CorpusEntry>> = HashMap::new();
+
+        for entry in entries {
+            by_routing_key
+                .entry(entry.routing_key)
+                .or_default()
+                .push(entry);
+        }
+
+        Self {
+            by_routing_key,
+            total_entries,
+        }
+    }
+
+    fn first_for(&self, key: RoutingKey) -> Option<&CorpusEntry> {
+        self.by_routing_key
+            .get(&key)
+            .and_then(|entries| entries.first())
+    }
+
+    fn entries_for(&self, key: RoutingKey) -> &[CorpusEntry] {
+        self.by_routing_key
+            .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn len(&self) -> usize {
+        self.total_entries
+    }
 }
 
 impl CorpusResolver {
@@ -55,23 +96,15 @@ impl CorpusResolver {
     }
 
     fn from_verified_corpus_file(corpus: CorpusFile) -> Self {
-        let entry_count = corpus.entries.len();
-        let mut entries: HashMap<RoutingKey, Vec<CorpusEntry>> = HashMap::new();
-
-        for entry in corpus.entries {
-            entries.entry(entry.routing_key).or_default().push(entry);
-        }
-
         Self {
-            entries,
+            entries: CorpusEntryIndex::from_entries(corpus.entries),
             schema_version: corpus.schema_version,
             canonical_key_id: corpus.canonical_key_id,
-            entry_count,
         }
     }
 
     pub fn entry_count(&self) -> usize {
-        self.entry_count
+        self.entries.len()
     }
 
     pub fn schema_version(&self) -> u32 {
@@ -83,7 +116,7 @@ impl CorpusResolver {
     }
 
     pub fn entries_for(&self, key: RoutingKey) -> &[CorpusEntry] {
-        self.entries.get(&key).map(Vec::as_slice).unwrap_or(&[])
+        self.entries.entries_for(key)
     }
 }
 
@@ -96,8 +129,7 @@ impl PromptResolver for CorpusResolver {
     ) -> Result<DirectiveString, BsuiteCoreError> {
         let entry = self
             .entries
-            .get(&key)
-            .and_then(|entries| entries.first())
+            .first_for(key)
             .ok_or(BsuiteCoreError::CorpusKeyMissing(key))?;
 
         Ok(DirectiveString::new(entry.directive.clone()))

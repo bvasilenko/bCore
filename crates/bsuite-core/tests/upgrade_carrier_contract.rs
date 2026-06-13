@@ -1,19 +1,8 @@
-use bsuite_core::{BsuiteCoreError, UpdateChannel, UpdateOutcome, Updater};
-
-struct PendingUpdater;
-
-impl Updater for PendingUpdater {
-    fn update(&self, _channel: UpdateChannel) -> Result<UpdateOutcome, BsuiteCoreError> {
-        unimplemented!("not yet implemented")
-    }
-}
+use bsuite_core::{SignedManifestUpdater, UpdateChannel, UpdateOutcome};
 
 #[test]
-#[should_panic(expected = "not yet implemented")]
-fn placeholder_updater_is_explicitly_pending() {
-    let updater = PendingUpdater;
-
-    let _ = updater.update(UpdateChannel::new("stable"));
+fn embedded_trust_bundle_constructs_signed_manifest_updater() {
+    let _updater = SignedManifestUpdater::new().expect("embedded trust bundle must parse");
 }
 
 #[test]
@@ -26,21 +15,5 @@ fn update_channel_preserves_inner_value() {
 
 #[test]
 fn update_outcome_exposes_expected_shapes() {
-    assert_eq!(UpdateOutcome::AlreadyCurrent, UpdateOutcome::AlreadyCurrent);
-    assert_eq!(
-        UpdateOutcome::Updated {
-            version: String::from("0.1.1")
-        },
-        UpdateOutcome::Updated {
-            version: String::from("0.1.1")
-        }
-    );
-    assert_eq!(
-        UpdateOutcome::Deferred {
-            reason: String::from("operator choice")
-        },
-        UpdateOutcome::Deferred {
-            reason: String::from("operator choice")
-        }
-    );
+    assert_eq!(UpdateOutcome::UpToDate, UpdateOutcome::UpToDate);
 }

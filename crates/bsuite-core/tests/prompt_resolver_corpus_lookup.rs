@@ -1,22 +1,42 @@
 mod common;
 
+use std::collections::BTreeMap;
+
 use bsuite_core::{
-    BsuiteCoreError, CorpusFile, CorpusResolver, EvidenceMap, ManifestOverlay, OverlayMap,
-    PromptResolver, RoutingKey,
+    BsuiteCoreError, CorpusEntry, CorpusFile, CorpusResolver, EvidenceMap, ManifestOverlay,
+    OverlayMap, PromptResolver, RoutingKey,
 };
 use common::{corpus_entry, corpus_file, signed_resolver};
+
+fn directive_for(key: RoutingKey) -> String {
+    format!("directive for {}", key.stable_name())
+}
+
+fn duplicate_directive_for(key: RoutingKey, suffix: &str) -> String {
+    format!("{} {}", key.stable_name(), suffix)
+}
+
+fn populated_evidence() -> EvidenceMap {
+    EvidenceMap::from([(
+        "corpus-lookup-ignored".to_string(),
+        "directive remains selected by routing key".to_string(),
+    )])
+}
+
+fn populated_overlay() -> ManifestOverlay {
+    let entries = BTreeMap::from([(
+        "corpus-lookup-ignored".to_string(),
+        "directive remains selected by routing key".to_string(),
+    )]);
+
+    ManifestOverlay::new(OverlayMap::new(entries).expect("overlay fixture has valid keys"))
+}
 
 fn resolver_with_all_keys() -> CorpusResolver {
     let entries = RoutingKey::ALL
         .into_iter()
         .enumerate()
-        .map(|(index, key)| {
-            corpus_entry(
-                key,
-                format!("directive for {}", key.stable_name()),
-                index as u32,
-            )
-        })
+        .map(|(index, key)| corpus_entry(key, directive_for(key), index as u32))
         .collect();
 
     signed_resolver(CorpusFile {
@@ -27,74 +47,118 @@ fn resolver_with_all_keys() -> CorpusResolver {
     })
 }
 
+fn duplicate_entries_for_all_keys() -> Vec<CorpusEntry> {
+    let first_entries = RoutingKey::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, key)| corpus_entry(key, duplicate_directive_for(key, "first"), index as u32));
+    let second_entries = RoutingKey::ALL
+        .into_iter()
+        .rev()
+        .enumerate()
+        .map(|(index, key)| {
+            corpus_entry(
+                key,
+                duplicate_directive_for(key, "second"),
+                (RoutingKey::ALL.len() + index) as u32,
+            )
+        });
+
+    first_entries.chain(second_entries).collect()
+}
+
+fn assert_resolves_to(
+    resolver: &CorpusResolver,
+    key: RoutingKey,
+    evidence: EvidenceMap,
+    overlay: Option<ManifestOverlay>,
+    expected: impl AsRef<str>,
+) {
+    let directive = resolver
+        .resolve(key, evidence, overlay)
+        .expect("corpus entry must resolve");
+
+    assert_eq!(directive.as_str(), expected.as_ref());
+}
+
+fn assert_missing_key(resolver: &CorpusResolver, key: RoutingKey) {
+    let error = resolver
+        .resolve(key, EvidenceMap::new(), None)
+        .expect_err("missing key must be explicit");
+
+    assert_eq!(error, BsuiteCoreError::CorpusKeyMissing(key));
+    assert!(resolver.entries_for(key).is_empty());
+}
+
 #[test]
 fn each_routing_key_variant_hits_the_right_entry() {
     let resolver = resolver_with_all_keys();
 
     for key in RoutingKey::ALL {
-        let directive = resolver
-            .resolve(key, EvidenceMap::new(), None)
-            .expect("every routing key has an entry");
-
-        assert_eq!(
-            directive.as_str(),
-            format!("directive for {}", key.stable_name())
-        );
+        assert_resolves_to(&resolver, key, EvidenceMap::new(), None, directive_for(key));
     }
 }
 
 #[test]
 fn missing_key_returns_expected_error_for_empty_and_partial_corpora() {
-    for resolver in [
-        signed_resolver(corpus_file(Vec::new())),
-        signed_resolver(corpus_file(vec![corpus_entry(
-            RoutingKey::BGround,
-            "only bground",
-            1,
-        )])),
-    ] {
-        let error = resolver
-            .resolve(RoutingKey::BAnchor, EvidenceMap::new(), None)
-            .expect_err("missing key must be explicit");
+    let empty_resolver = signed_resolver(corpus_file(Vec::new()));
+    for key in RoutingKey::ALL {
+        assert_missing_key(&empty_resolver, key);
+    }
 
-        assert_eq!(
-            error,
-            BsuiteCoreError::CorpusKeyMissing(RoutingKey::BAnchor)
-        );
-        assert!(resolver.entries_for(RoutingKey::BAnchor).is_empty());
+    for present_key in RoutingKey::ALL {
+        let resolver = signed_resolver(corpus_file(vec![corpus_entry(
+            present_key,
+            directive_for(present_key),
+            1,
+        )]));
+
+        for key in RoutingKey::ALL {
+            if key == present_key {
+                assert_resolves_to(&resolver, key, EvidenceMap::new(), None, directive_for(key));
+            } else {
+                assert_missing_key(&resolver, key);
+            }
+        }
     }
 }
 
 #[test]
-fn evidence_and_overlay_do_not_change_lookup_in_this_cycle() {
+fn evidence_and_overlay_do_not_change_lookup_for_any_routing_key() {
     let resolver = resolver_with_all_keys();
-    let mut evidence = EvidenceMap::new();
-    evidence.insert("ignored".to_string(), "unchanged-by-lookup".to_string());
-    let overlay = ManifestOverlay::new(OverlayMap::empty());
+    let input_cases = [
+        (EvidenceMap::new(), None),
+        (
+            EvidenceMap::new(),
+            Some(ManifestOverlay::new(OverlayMap::empty())),
+        ),
+        (populated_evidence(), None),
+        (populated_evidence(), Some(populated_overlay())),
+    ];
 
-    let directive = resolver
-        .resolve(RoutingKey::BSmell, evidence, Some(overlay))
-        .expect("host inputs pass through without changing corpus lookup");
-
-    assert_eq!(directive.as_str(), "directive for bsmell");
+    for key in RoutingKey::ALL {
+        for (evidence, overlay) in input_cases.clone() {
+            assert_resolves_to(&resolver, key, evidence, overlay, directive_for(key));
+        }
+    }
 }
 
 #[test]
-fn duplicate_routing_entries_are_preserved_and_resolve_stably() {
-    let resolver = signed_resolver(corpus_file(vec![
-        corpus_entry(RoutingKey::BWatch, "first directive", 1),
-        corpus_entry(RoutingKey::BWatch, "second directive", 2),
-    ]));
+fn duplicate_routing_entries_are_preserved_and_resolve_by_corpus_order_for_every_key() {
+    let resolver = signed_resolver(corpus_file(duplicate_entries_for_all_keys()));
 
-    assert_eq!(resolver.entry_count(), 2);
-    assert_eq!(resolver.entries_for(RoutingKey::BWatch).len(), 2);
-    assert_eq!(
-        resolver
-            .resolve(RoutingKey::BWatch, EvidenceMap::new(), None)
-            .expect("duplicate entries resolve by stable corpus order")
-            .as_str(),
-        "first directive"
-    );
+    assert_eq!(resolver.entry_count(), RoutingKey::ALL.len() * 2);
+
+    for key in RoutingKey::ALL {
+        assert_eq!(resolver.entries_for(key).len(), 2);
+        assert_resolves_to(
+            &resolver,
+            key,
+            EvidenceMap::new(),
+            None,
+            duplicate_directive_for(key, "first"),
+        );
+    }
 }
 
 #[test]
