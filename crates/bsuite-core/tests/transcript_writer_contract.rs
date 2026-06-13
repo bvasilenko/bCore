@@ -1,38 +1,55 @@
+mod transcript_common;
+
 use bsuite_core::{
-    BsuiteCoreError, RoutingKey, TranscriptAppender, TranscriptHandle, TranscriptRecord,
+    BsuiteCoreError, FileSystemTranscriptAppender, HostContext, RoutingKey, TranscriptAppender,
+    TranscriptHandle,
 };
-use std::time::SystemTime;
+use serde_json::json;
+use transcript_common::{transcript_record, transcript_record_for};
 
-struct PendingTranscriptAppender;
+#[test]
+fn transcript_record_preserves_wire_fields() {
+    let record = transcript_record_for(
+        "wire-fields",
+        RoutingKey::BGround,
+        HostContext::L2a,
+        json!({"fixture": true}),
+    );
 
-impl TranscriptAppender for PendingTranscriptAppender {
-    fn append(&self, _record: TranscriptRecord) -> Result<TranscriptHandle, BsuiteCoreError> {
-        unimplemented!("not yet implemented")
-    }
+    assert_eq!(record.schema_version, 1);
+    assert_eq!(record.binary_name, "bground");
+    assert_eq!(record.routing_key, RoutingKey::BGround);
+    assert_eq!(record.host_context, HostContext::L2a);
+    assert_eq!(record.additional_fields, json!({"fixture": true}));
 }
 
 #[test]
-#[should_panic(expected = "not yet implemented")]
-fn placeholder_transcript_appender_is_explicitly_pending() {
-    let appender = PendingTranscriptAppender;
-    let record = TranscriptRecord::new(RoutingKey::banchor(), "captured", SystemTime::UNIX_EPOCH);
+fn transcript_handle_exposes_written_path() {
+    let handle = TranscriptHandle::new("transcript-1.jsonl");
 
-    let _ = appender.append(record);
+    assert_eq!(handle.as_path().to_string_lossy(), "transcript-1.jsonl");
+    assert_eq!(handle.as_str(), "transcript-1.jsonl");
+    assert_eq!(handle.into_inner(), "transcript-1.jsonl");
 }
 
 #[test]
-fn transcript_record_preserves_fields() {
-    let record = TranscriptRecord::new(RoutingKey::bwatch(), "captured", SystemTime::UNIX_EPOCH);
+fn filesystem_appender_can_be_used_through_trait_without_consuming_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let appender =
+        FileSystemTranscriptAppender::from_base_dir(directory.path().join("bground"), 90);
+    let record = transcript_record("ownership");
 
-    assert_eq!(record.routing_key, RoutingKey::BWatch);
-    assert_eq!(record.message, "captured");
-    assert_eq!(record.recorded_at, SystemTime::UNIX_EPOCH);
+    let handle = appender.append(&record).unwrap();
+
+    assert!(handle.as_path().exists());
+    assert_eq!(record.binary_name, "bground");
 }
 
 #[test]
-fn transcript_handle_preserves_inner_value() {
-    let handle = TranscriptHandle::new("transcript-1");
+fn unsafe_binary_name_fails_before_path_join() {
+    let error = FileSystemTranscriptAppender::new("../bground")
+        .err()
+        .unwrap();
 
-    assert_eq!(handle.as_str(), "transcript-1");
-    assert_eq!(handle.into_inner(), "transcript-1");
+    assert!(matches!(error, BsuiteCoreError::TranscriptPathFailed(_)));
 }

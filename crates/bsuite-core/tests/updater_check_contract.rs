@@ -1,7 +1,8 @@
 mod common;
 
 use bsuite_core::{
-    BsuiteCoreError, PlatformId, SignedManifestUpdater, UpdateChannel, UpdateOutcome, Updater,
+    BsuiteCoreError, FetchLimits, PlatformId, SignedManifestUpdater, UpdateChannel, UpdateOutcome,
+    Updater,
 };
 use common::{
     manifest_signature, manifest_signing_key, signed_manifest, trust_bundle,
@@ -10,6 +11,8 @@ use common::{
 use httpmock::Method::GET;
 use httpmock::MockServer;
 use semver::Version;
+
+const FETCH_ATTEMPTS: usize = 3;
 
 fn serve_manifest(server: &MockServer, manifest_body: String, signature_body: String) {
     server.mock(|when, then| {
@@ -369,4 +372,324 @@ fn missing_current_platform_returns_manifest_platform_missing() {
         error,
         BsuiteCoreError::ManifestPlatformMissing("windows-x86_64".to_string())
     );
+}
+
+#[test]
+fn oversized_manifest_response_is_rejected_without_signature_fetch() {
+    const SMALL_LIMIT: u64 = 5;
+
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let manifest_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(200).body(vec![0u8; SMALL_LIMIT as usize + 1]);
+    });
+    let signature_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json.sig");
+        then.status(200).body("");
+    });
+    let updater = SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key))
+        .unwrap()
+        .with_fetch_limits(FetchLimits {
+            manifest_body_bytes: SMALL_LIMIT,
+            ..FetchLimits::default()
+        });
+
+    let error = check_with_server(&updater, &server).expect_err("oversized manifest must fail");
+
+    assert_eq!(
+        error,
+        BsuiteCoreError::ResponseBodyTooLarge {
+            limit_bytes: SMALL_LIMIT,
+            found_bytes: SMALL_LIMIT + 1,
+        }
+    );
+    assert_eq!(manifest_mock.hits(), 1);
+    assert_eq!(signature_mock.hits(), 0);
+}
+
+#[test]
+fn oversized_signature_response_is_rejected_after_manifest_fetch() {
+    const SMALL_LIMIT: u64 = 5;
+
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let platform = PlatformId::current();
+    let manifest = signed_manifest(
+        "0.2.0",
+        "test-key",
+        platform,
+        server.url("/archive.tar"),
+        "0".repeat(64),
+    );
+    let manifest_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(200)
+            .body(serde_json::to_string(&manifest).unwrap());
+    });
+    let signature_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json.sig");
+        then.status(200).body(vec![0u8; SMALL_LIMIT as usize + 1]);
+    });
+    let updater = SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key))
+        .unwrap()
+        .with_fetch_limits(FetchLimits {
+            signature_body_bytes: SMALL_LIMIT,
+            ..FetchLimits::default()
+        });
+
+    let error = check_with_server(&updater, &server).expect_err("oversized signature must fail");
+
+    assert_eq!(
+        error,
+        BsuiteCoreError::ResponseBodyTooLarge {
+            limit_bytes: SMALL_LIMIT,
+            found_bytes: SMALL_LIMIT + 1,
+        }
+    );
+    assert_eq!(manifest_mock.hits(), 1);
+    assert_eq!(signature_mock.hits(), 1);
+}
+
+#[test]
+fn invalid_manifest_body_reports_manifest_fetch_failed() {
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    serve_manifest(
+        &server,
+        "{not-json".to_string(),
+        "ed25519:not-base64".to_string(),
+    );
+    let updater =
+        SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key)).unwrap();
+
+    let error = check_with_server(&updater, &server).expect_err("invalid manifest body must fail");
+
+    assert!(matches!(error, BsuiteCoreError::ManifestFetchFailed(_)));
+}
+
+#[test]
+fn transient_manifest_fetch_failure_is_retried() {
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let manifest_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(503);
+    });
+    let updater =
+        SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key)).unwrap();
+
+    let error = check_with_server(&updater, &server).expect_err("transient failure must fail");
+
+    assert!(matches!(error, BsuiteCoreError::ManifestFetchFailed(_)));
+    assert_eq!(manifest_mock.hits(), FETCH_ATTEMPTS);
+}
+
+#[test]
+fn semantic_manifest_rejections_are_not_retried() {
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let platform = PlatformId::current();
+    let mut manifest = signed_manifest(
+        "0.2.0",
+        "test-key",
+        platform,
+        server.url("/archive.tar"),
+        "0".repeat(64),
+    );
+    manifest.schema_version = 99;
+    let manifest_body = serde_json::to_string(&manifest).unwrap();
+    let signature_body = manifest_signature(&manifest, &key);
+    let manifest_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(200).body(manifest_body);
+    });
+    let signature_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json.sig");
+        then.status(200).body(signature_body);
+    });
+    let updater =
+        SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key)).unwrap();
+
+    let error = check_with_server(&updater, &server).expect_err("schema mismatch must fail");
+
+    assert!(matches!(
+        error,
+        BsuiteCoreError::ManifestSchemaMismatch { .. }
+    ));
+    assert_eq!(manifest_mock.hits(), 1);
+    assert_eq!(signature_mock.hits(), 1);
+}
+
+#[test]
+fn manifest_body_exactly_at_limit_is_accepted_by_size_check() {
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let platform = PlatformId::current();
+    let manifest = signed_manifest(
+        "0.2.0",
+        "test-key",
+        platform,
+        server.url("/archive.tar"),
+        "0".repeat(64),
+    );
+    let manifest_body = serde_json::to_string(&manifest).unwrap();
+    let body_len = manifest_body.len() as u64;
+
+    server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(200).body(manifest_body);
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/manifest.json.sig");
+        then.status(200)
+            .body("ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    });
+    let updater = SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key))
+        .unwrap()
+        .with_fetch_limits(FetchLimits {
+            manifest_body_bytes: body_len,
+            ..FetchLimits::default()
+        });
+
+    let error = check_with_server(&updater, &server)
+        .expect_err("manifest body at size limit must not be rejected by size check");
+
+    assert!(
+        !matches!(error, BsuiteCoreError::ResponseBodyTooLarge { .. }),
+        "manifest body exactly at limit must not be rejected by size check"
+    );
+    assert_eq!(error, BsuiteCoreError::ManifestSignatureInvalid);
+}
+
+#[test]
+fn signature_body_exactly_at_limit_is_accepted_by_size_check() {
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let platform = PlatformId::current();
+    let manifest = signed_manifest(
+        "0.2.0",
+        "test-key",
+        platform,
+        server.url("/archive.tar"),
+        "0".repeat(64),
+    );
+    let sig_body = manifest_signature(&manifest, &key);
+    let sig_len = sig_body.len() as u64;
+
+    serve_manifest(&server, serde_json::to_string(&manifest).unwrap(), sig_body);
+    let updater = SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key))
+        .unwrap()
+        .with_fetch_limits(FetchLimits {
+            signature_body_bytes: sig_len,
+            ..FetchLimits::default()
+        });
+
+    let outcome = check_with_server(&updater, &server).unwrap();
+
+    assert!(matches!(outcome, UpdateOutcome::UpgradeAvailable { .. }));
+}
+
+#[test]
+fn oversized_manifest_response_is_not_retried() {
+    const SMALL_LIMIT: u64 = 5;
+
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let manifest_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(200).body(vec![0u8; SMALL_LIMIT as usize + 1]);
+    });
+    let updater = SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key))
+        .unwrap()
+        .with_fetch_limits(FetchLimits {
+            manifest_body_bytes: SMALL_LIMIT,
+            ..FetchLimits::default()
+        });
+
+    let error = check_with_server(&updater, &server).expect_err("oversized manifest must fail");
+
+    assert!(matches!(
+        error,
+        BsuiteCoreError::ResponseBodyTooLarge { .. }
+    ));
+    assert_eq!(
+        manifest_mock.hits(),
+        1,
+        "oversized response must not trigger retries"
+    );
+}
+
+#[test]
+fn oversized_signature_response_is_not_retried() {
+    const SMALL_LIMIT: u64 = 5;
+
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let platform = PlatformId::current();
+    let manifest = signed_manifest(
+        "0.2.0",
+        "test-key",
+        platform,
+        server.url("/archive.tar"),
+        "0".repeat(64),
+    );
+    server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(200)
+            .body(serde_json::to_string(&manifest).unwrap());
+    });
+    let signature_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json.sig");
+        then.status(200).body(vec![0u8; SMALL_LIMIT as usize + 1]);
+    });
+    let updater = SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key))
+        .unwrap()
+        .with_fetch_limits(FetchLimits {
+            signature_body_bytes: SMALL_LIMIT,
+            ..FetchLimits::default()
+        });
+
+    let error = check_with_server(&updater, &server).expect_err("oversized signature must fail");
+
+    assert!(matches!(
+        error,
+        BsuiteCoreError::ResponseBodyTooLarge { .. }
+    ));
+    assert_eq!(
+        signature_mock.hits(),
+        1,
+        "oversized response must not trigger retries"
+    );
+}
+
+#[test]
+fn transient_signature_fetch_failure_is_retried() {
+    let server = MockServer::start();
+    let key = manifest_signing_key(17);
+    let platform = PlatformId::current();
+    let manifest = signed_manifest(
+        "0.2.0",
+        "test-key",
+        platform,
+        server.url("/archive.tar"),
+        "0".repeat(64),
+    );
+    server.mock(|when, then| {
+        when.method(GET).path("/manifest.json");
+        then.status(200)
+            .body(serde_json::to_string(&manifest).unwrap());
+    });
+    let signature_mock = server.mock(|when, then| {
+        when.method(GET).path("/manifest.json.sig");
+        then.status(503);
+    });
+    let updater =
+        SignedManifestUpdater::from_trust_bundle_str(&trust_bundle("test-key", &key)).unwrap();
+
+    let error =
+        check_with_server(&updater, &server).expect_err("transient signature failure must fail");
+
+    assert!(matches!(error, BsuiteCoreError::SignatureFetchFailed(_)));
+    assert_eq!(signature_mock.hits(), FETCH_ATTEMPTS);
 }
