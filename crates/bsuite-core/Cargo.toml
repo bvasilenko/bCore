@@ -10,6 +10,7 @@ readme = "../../README.md"
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
+directories.workspace = true
 ed25519-dalek.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -20,6 +21,7 @@ sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+ulid.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
