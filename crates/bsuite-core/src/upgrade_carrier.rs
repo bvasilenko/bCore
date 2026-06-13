@@ -2,7 +2,9 @@ use crate::BsuiteCoreError;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, VerifyingKey};
+use reqwest::StatusCode;
 use reqwest::blocking::Client;
+use reqwest::header::CONTENT_LENGTH;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,6 +18,24 @@ pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const MANIFEST_BODY_LIMIT_BYTES: u64 = 1024 * 1024;
 const SIGNATURE_BODY_LIMIT_BYTES: u64 = 1024 * 8;
 const ARCHIVE_BODY_LIMIT_BYTES: u64 = 1024 * 1024 * 100;
+const FETCH_ATTEMPTS: usize = 3;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct FetchLimits {
+    pub manifest_body_bytes: u64,
+    pub signature_body_bytes: u64,
+    pub archive_body_bytes: u64,
+}
+
+impl Default for FetchLimits {
+    fn default() -> Self {
+        Self {
+            manifest_body_bytes: MANIFEST_BODY_LIMIT_BYTES,
+            signature_body_bytes: SIGNATURE_BODY_LIMIT_BYTES,
+            archive_body_bytes: ARCHIVE_BODY_LIMIT_BYTES,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct UpdateChannel(String);
@@ -138,6 +158,7 @@ pub struct SignedManifestUpdater {
     client: Client,
     trust_bundle: Vec<TrustedKey>,
     platform: PlatformId,
+    fetch_limits: FetchLimits,
 }
 
 impl SignedManifestUpdater {
@@ -156,6 +177,7 @@ impl SignedManifestUpdater {
             client,
             trust_bundle: parse_trust_bundle(toml)?,
             platform: PlatformId::current(),
+            fetch_limits: FetchLimits::default(),
         })
     }
 
@@ -166,6 +188,11 @@ impl SignedManifestUpdater {
         let mut updater = Self::from_trust_bundle_str(toml)?;
         updater.platform = platform;
         Ok(updater)
+    }
+
+    pub fn with_fetch_limits(mut self, limits: FetchLimits) -> Self {
+        self.fetch_limits = limits;
+        self
     }
 
     pub fn apply(
@@ -183,43 +210,56 @@ impl SignedManifestUpdater {
             .ok_or_else(|| BsuiteCoreError::ManifestPlatformMissing(platform.key().to_string()))?;
         let archive_bytes = self.fetch_body(
             &artefact.archive_url,
-            ARCHIVE_BODY_LIMIT_BYTES,
+            self.fetch_limits.archive_body_bytes,
             FetchFailureKind::Artefact,
         )?;
         verify_sha256(&archive_bytes, &artefact.sha256)?;
 
-        let executable_name = executable_name(&manifest.binary_name, *platform);
-        let staging_dir = install_dir.join(staging_dir_name(&manifest.binary_name));
+        let filesystem = RealInstallFilesystem;
+        self.apply_archive(
+            &archive_bytes,
+            install_dir,
+            &manifest.binary_name,
+            *platform,
+            &filesystem,
+        )
+    }
+
+    fn apply_archive<F: InstallFilesystem>(
+        &self,
+        archive_bytes: &[u8],
+        install_dir: &Path,
+        binary_name: &str,
+        platform: PlatformId,
+        filesystem: &F,
+    ) -> Result<(), BsuiteCoreError> {
+        let executable_name = executable_name(binary_name, platform);
+        let staging_dir = install_dir.join(staging_dir_name(binary_name));
         let backup_path = install_dir.join(format!("{executable_name}.old"));
         let final_path = install_dir.join(&executable_name);
         let new_path = staging_dir.join(&executable_name);
 
         remove_dir_if_exists(&staging_dir)?;
-        fs::create_dir_all(&staging_dir)
-            .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))?;
+        filesystem.create_dir_all(&staging_dir)?;
 
         let install_result = (|| {
-            extract_tar_archive(&archive_bytes, &staging_dir)?;
+            extract_tar_archive(archive_bytes, &staging_dir)?;
             require_regular_file(&new_path)?;
             sync_tree(&staging_dir)?;
-            fs::create_dir_all(install_dir)
-                .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))?;
+            filesystem.create_dir_all(install_dir)?;
 
             if backup_path.exists() {
-                fs::remove_file(&backup_path)
-                    .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))?;
+                filesystem.remove_file(&backup_path)?;
             }
             if final_path.exists() {
-                fs::rename(&final_path, &backup_path)
-                    .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))?;
+                filesystem.rename(&final_path, &backup_path)?;
             }
-            if let Err(error) = fs::rename(&new_path, &final_path) {
-                rollback_install(&final_path, &backup_path)?;
-                return Err(BsuiteCoreError::AtomicInstallFailed(error.to_string()));
+            if let Err(error) = filesystem.rename(&new_path, &final_path) {
+                rollback_install(&final_path, &backup_path, filesystem)?;
+                return Err(error);
             }
             if backup_path.exists() {
-                fs::remove_file(&backup_path)
-                    .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))?;
+                filesystem.remove_file(&backup_path)?;
             }
             sync_directory(install_dir)?;
             Ok(())
@@ -236,23 +276,52 @@ impl SignedManifestUpdater {
         limit_bytes: u64,
         failure_kind: FetchFailureKind,
     ) -> Result<Vec<u8>, BsuiteCoreError> {
+        let mut last_error = None;
+        for attempt in 1..=FETCH_ATTEMPTS {
+            match self.fetch_body_once(url, limit_bytes, failure_kind) {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) if error.retryable && attempt < FETCH_ATTEMPTS => {
+                    last_error = Some(error.error);
+                }
+                Err(error) => return Err(error.error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| failure_kind.error("fetch retry exhausted".to_string())))
+    }
+
+    fn fetch_body_once(
+        &self,
+        url: &str,
+        limit_bytes: u64,
+        failure_kind: FetchFailureKind,
+    ) -> Result<Vec<u8>, FetchAttemptError> {
         let mut response = self
             .client
             .get(url)
             .send()
-            .map_err(|error| failure_kind.error(error.to_string()))?;
+            .map_err(|error| FetchAttemptError {
+                error: failure_kind.error(error.to_string()),
+                retryable: true,
+            })?;
 
         if !response.status().is_success() {
-            return Err(failure_kind.error(format!("HTTP status {}", response.status())));
+            let status = response.status();
+            return Err(FetchAttemptError {
+                error: failure_kind.error(format!("HTTP status {status}")),
+                retryable: is_retryable_status(status),
+            });
         }
 
-        if response
-            .content_length()
-            .is_some_and(|length| length > limit_bytes)
+        if let Some(advertised) = advertised_content_length(&response)
+            && advertised > limit_bytes
         {
-            return Err(BsuiteCoreError::ResponseBodyTooLarge {
-                limit_bytes,
-                found_bytes: response.content_length().unwrap_or(limit_bytes + 1),
+            return Err(FetchAttemptError {
+                error: BsuiteCoreError::ResponseBodyTooLarge {
+                    limit_bytes,
+                    found_bytes: advertised,
+                },
+                retryable: false,
             });
         }
 
@@ -260,11 +329,17 @@ impl SignedManifestUpdater {
         let mut bytes = Vec::new();
         limited
             .read_to_end(&mut bytes)
-            .map_err(|error| failure_kind.error(error.to_string()))?;
+            .map_err(|error| FetchAttemptError {
+                error: failure_kind.error(error.to_string()),
+                retryable: true,
+            })?;
         if bytes.len() as u64 > limit_bytes {
-            return Err(BsuiteCoreError::ResponseBodyTooLarge {
-                limit_bytes,
-                found_bytes: bytes.len() as u64,
+            return Err(FetchAttemptError {
+                error: BsuiteCoreError::ResponseBodyTooLarge {
+                    limit_bytes,
+                    found_bytes: bytes.len() as u64,
+                },
+                retryable: false,
             });
         }
         Ok(bytes)
@@ -281,12 +356,12 @@ impl Updater for SignedManifestUpdater {
         let signature_url = signature_url(channel);
         let manifest_bytes = self.fetch_body(
             &manifest_url,
-            MANIFEST_BODY_LIMIT_BYTES,
+            self.fetch_limits.manifest_body_bytes,
             FetchFailureKind::Manifest,
         )?;
         let signature_bytes = self.fetch_body(
             &signature_url,
-            SIGNATURE_BODY_LIMIT_BYTES,
+            self.fetch_limits.signature_body_bytes,
             FetchFailureKind::Signature,
         )?;
         let manifest = parse_manifest(&manifest_bytes)?;
@@ -306,11 +381,55 @@ impl Updater for SignedManifestUpdater {
     }
 }
 
+struct FetchAttemptError {
+    error: BsuiteCoreError,
+    retryable: bool,
+}
+
+fn is_retryable_status(status: StatusCode) -> bool {
+    status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
+}
+
+fn advertised_content_length(response: &reqwest::blocking::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
 #[derive(Clone, Copy)]
 enum FetchFailureKind {
     Manifest,
     Signature,
     Artefact,
+}
+
+trait InstallFilesystem {
+    fn create_dir_all(&self, path: &Path) -> Result<(), BsuiteCoreError>;
+    fn remove_file(&self, path: &Path) -> Result<(), BsuiteCoreError>;
+    fn rename(&self, from: &Path, to: &Path) -> Result<(), BsuiteCoreError>;
+}
+
+struct RealInstallFilesystem;
+
+impl InstallFilesystem for RealInstallFilesystem {
+    fn create_dir_all(&self, path: &Path) -> Result<(), BsuiteCoreError> {
+        fs::create_dir_all(path)
+            .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), BsuiteCoreError> {
+        fs::remove_file(path)
+            .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> Result<(), BsuiteCoreError> {
+        fs::rename(from, to)
+            .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))
+    }
 }
 
 impl FetchFailureKind {
@@ -574,13 +693,17 @@ fn sync_directory(_path: &Path) -> Result<(), BsuiteCoreError> {
     Ok(())
 }
 
-fn rollback_install(final_path: &Path, backup_path: &Path) -> Result<(), BsuiteCoreError> {
+fn rollback_install<F: InstallFilesystem>(
+    final_path: &Path,
+    backup_path: &Path,
+    filesystem: &F,
+) -> Result<(), BsuiteCoreError> {
     if final_path.exists() {
-        fs::remove_file(final_path)
-            .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))?;
+        filesystem.remove_file(final_path)?;
     }
     if backup_path.exists() {
-        fs::rename(backup_path, final_path)
+        filesystem
+            .rename(backup_path, final_path)
             .map_err(|error| BsuiteCoreError::InstallRollbackFailed(error.to_string()))?;
     }
     Ok(())
@@ -592,4 +715,133 @@ fn remove_dir_if_exists(path: &Path) -> Result<(), BsuiteCoreError> {
             .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::io::Cursor;
+
+    struct RenameFailureFilesystem {
+        rename_calls: Cell<usize>,
+        rollback_fails: bool,
+    }
+
+    impl InstallFilesystem for RenameFailureFilesystem {
+        fn create_dir_all(&self, path: &Path) -> Result<(), BsuiteCoreError> {
+            fs::create_dir_all(path)
+                .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))
+        }
+
+        fn remove_file(&self, path: &Path) -> Result<(), BsuiteCoreError> {
+            fs::remove_file(path)
+                .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string()))
+        }
+
+        fn rename(&self, from: &Path, to: &Path) -> Result<(), BsuiteCoreError> {
+            let calls = self.rename_calls.get() + 1;
+            self.rename_calls.set(calls);
+            match calls {
+                1 => fs::rename(from, to)
+                    .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string())),
+                2 => Err(BsuiteCoreError::AtomicInstallFailed(
+                    "forced final rename failure".to_string(),
+                )),
+                _ if self.rollback_fails => Err(BsuiteCoreError::AtomicInstallFailed(
+                    "forced rollback failure".to_string(),
+                )),
+                _ => fs::rename(from, to)
+                    .map_err(|error| BsuiteCoreError::AtomicInstallFailed(error.to_string())),
+            }
+        }
+    }
+
+    fn updater() -> SignedManifestUpdater {
+        SignedManifestUpdater::from_trust_bundle_str(include_str!("../keys/trust-bundle-v1.toml"))
+            .unwrap()
+    }
+
+    fn install_original(install_dir: &tempfile::TempDir, platform: PlatformId) {
+        fs::write(
+            install_dir
+                .path()
+                .join(executable_name("bground", platform)),
+            b"old binary",
+        )
+        .unwrap();
+    }
+
+    fn tar_with_file(path: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut output);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, path, Cursor::new(bytes))
+                .unwrap();
+            builder.finish().unwrap();
+        }
+        output
+    }
+
+    #[test]
+    fn rollback_failure_is_reported_distinctly() {
+        let install_dir = tempfile::tempdir().unwrap();
+        let platform = PlatformId::current();
+        let archive = tar_with_file(&executable_name("bground", platform), b"new binary");
+        install_original(&install_dir, platform);
+        let filesystem = RenameFailureFilesystem {
+            rename_calls: Cell::new(0),
+            rollback_fails: true,
+        };
+
+        let error = updater()
+            .apply_archive(
+                &archive,
+                install_dir.path(),
+                "bground",
+                platform,
+                &filesystem,
+            )
+            .expect_err("forced rollback failure must fail distinctly");
+
+        assert!(matches!(error, BsuiteCoreError::InstallRollbackFailed(_)));
+    }
+
+    #[test]
+    fn final_rename_failure_restores_original_executable() {
+        let install_dir = tempfile::tempdir().unwrap();
+        let platform = PlatformId::current();
+        let archive = tar_with_file(&executable_name("bground", platform), b"new binary");
+        install_original(&install_dir, platform);
+        let filesystem = RenameFailureFilesystem {
+            rename_calls: Cell::new(0),
+            rollback_fails: false,
+        };
+
+        let error = updater()
+            .apply_archive(
+                &archive,
+                install_dir.path(),
+                "bground",
+                platform,
+                &filesystem,
+            )
+            .expect_err("forced final rename failure must fail");
+
+        assert!(matches!(error, BsuiteCoreError::AtomicInstallFailed(_)));
+        assert_eq!(
+            fs::read(
+                install_dir
+                    .path()
+                    .join(executable_name("bground", platform))
+            )
+            .unwrap(),
+            b"old binary"
+        );
+    }
 }
