@@ -235,3 +235,103 @@ pub fn raw_tar_with_unchecked_path(path: &str, bytes: &[u8]) -> Vec<u8> {
 pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+
+use bsuite_core::{EmitFormat, ProcessExitEmitter};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone)]
+pub struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+impl SharedBuf {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(Vec::new())))
+    }
+
+    pub fn bytes(&self) -> Vec<u8> {
+        self.0.lock().unwrap().clone()
+    }
+
+    pub fn string(&self) -> String {
+        String::from_utf8(self.bytes()).expect("valid utf8")
+    }
+}
+
+impl std::io::Write for SharedBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn buf_emitter(format: EmitFormat) -> (ProcessExitEmitter, SharedBuf, SharedBuf) {
+    let out = SharedBuf::new();
+    let err = SharedBuf::new();
+    let emitter =
+        ProcessExitEmitter::for_streams(format, Box::new(out.clone()), Box::new(err.clone()));
+    (emitter, out, err)
+}
+
+use bsuite_core::{BsuiteCoreError, OverlayValidationError};
+
+pub fn all_bsuite_core_error_variants() -> Vec<BsuiteCoreError> {
+    vec![
+        BsuiteCoreError::PromptResolution("x".into()),
+        BsuiteCoreError::Update("x".into()),
+        BsuiteCoreError::Transcript("x".into()),
+        BsuiteCoreError::TranscriptPathFailed("x".into()),
+        BsuiteCoreError::TranscriptWriteFailed("x".into()),
+        BsuiteCoreError::TranscriptSerializationFailed("x".into()),
+        BsuiteCoreError::TranscriptManifestFailed("x".into()),
+        BsuiteCoreError::ManifestFetchFailed("x".into()),
+        BsuiteCoreError::SignatureFetchFailed("x".into()),
+        BsuiteCoreError::ManifestSignatureInvalid,
+        BsuiteCoreError::ManifestUnknownSigningKey("x".into()),
+        BsuiteCoreError::ManifestSigningKeyExpired("x".into()),
+        BsuiteCoreError::ManifestSigningKeyNotYetValid("x".into()),
+        BsuiteCoreError::ManifestSigningKeyRevoked("x".into()),
+        BsuiteCoreError::ManifestSchemaMismatch {
+            expected: 1,
+            found: 2,
+        },
+        BsuiteCoreError::ManifestPlatformMissing("x".into()),
+        BsuiteCoreError::ArtifactFetchFailed("x".into()),
+        BsuiteCoreError::ArtifactSha256Mismatch {
+            expected: "aaa".into(),
+            found: "bbb".into(),
+        },
+        BsuiteCoreError::ResponseBodyTooLarge {
+            limit_bytes: 1,
+            found_bytes: 2,
+        },
+        BsuiteCoreError::AtomicInstallFailed("x".into()),
+        BsuiteCoreError::InstallRollbackFailed("x".into()),
+        BsuiteCoreError::ExitCode("x".into()),
+        BsuiteCoreError::VisibilityEvidence("x".into()),
+        BsuiteCoreError::AdapterHostBinding("x".into()),
+        BsuiteCoreError::CorpusSignatureInvalid,
+        BsuiteCoreError::CorpusSchemaMismatch {
+            expected: 1,
+            found: 2,
+        },
+        BsuiteCoreError::CorpusDeserializationFailed("x".into()),
+        BsuiteCoreError::CorpusKeyMissing(RoutingKey::BGround),
+        BsuiteCoreError::ManifestOverlay(OverlayValidationError::SignatureMissing),
+    ]
+}
+
+pub fn all_overlay_validation_sub_variants() -> Vec<OverlayValidationError> {
+    vec![
+        OverlayValidationError::SignatureMissing,
+        OverlayValidationError::SignatureInvalid,
+        OverlayValidationError::PubkeyMissing,
+        OverlayValidationError::SchemaMismatch {
+            expected: 1,
+            found: 2,
+        },
+        OverlayValidationError::UnknownKey { key: "k".into() },
+        OverlayValidationError::TomlParseFailed("bad".into()),
+    ]
+}
