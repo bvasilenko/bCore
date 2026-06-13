@@ -3,12 +3,18 @@ members = ["crates/bsuite-core"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/bvasilenko/bsuite-core"
 readme = "README.md"
 
 [workspace.dependencies]
+base64 = "0.22"
+ed25519-dalek = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_json_canonicalizer = "0.3.2"
 thiserror = "2"
+toml = "0.8"
 proptest = "1"
