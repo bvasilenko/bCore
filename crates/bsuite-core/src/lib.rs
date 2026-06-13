@@ -12,7 +12,7 @@ pub mod upgrade_carrier;
 pub use adapter_host_bind::{AdapterBinding, AdapterHostBinder, HostContext};
 pub use corpus::{CorpusEntry, CorpusFile, ProvenanceRecord};
 pub use error::BsuiteCoreError;
-pub use exit_code::{ExitCode, ExitCodeEmitter};
+pub use exit_code::{EmitFormat, ExitCode, ExitCodeEmitter, ExitCodeRouting, ProcessExitEmitter};
 pub use manifest_overlay::{
     ALLOWED_OVERRIDE_KEYS, BinaryDefaults, FileSystemManifestOverlayReader, ManifestOverlay,
     ManifestOverlayReader, OVERLAY_SCHEMA_VERSION, OverlayValidationError, OverrideMap,
