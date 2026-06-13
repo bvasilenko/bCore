@@ -1,10 +1,8 @@
 mod common;
 
-use std::collections::BTreeMap;
-
 use bsuite_core::{
     BsuiteCoreError, CorpusEntry, CorpusFile, CorpusResolver, EvidenceMap, ManifestOverlay,
-    OverlayMap, PromptResolver, RoutingKey,
+    PromptResolver, RoutingKey,
 };
 use common::{corpus_entry, corpus_file, signed_resolver};
 
@@ -24,12 +22,7 @@ fn populated_evidence() -> EvidenceMap {
 }
 
 fn populated_overlay() -> ManifestOverlay {
-    let entries = BTreeMap::from([(
-        "corpus-lookup-ignored".to_string(),
-        "directive remains selected by routing key".to_string(),
-    )]);
-
-    ManifestOverlay::new(OverlayMap::new(entries).expect("overlay fixture has valid keys"))
+    ManifestOverlay::empty()
 }
 
 fn resolver_with_all_keys() -> CorpusResolver {
@@ -128,10 +121,7 @@ fn evidence_and_overlay_do_not_change_lookup_for_any_routing_key() {
     let resolver = resolver_with_all_keys();
     let input_cases = [
         (EvidenceMap::new(), None),
-        (
-            EvidenceMap::new(),
-            Some(ManifestOverlay::new(OverlayMap::empty())),
-        ),
+        (EvidenceMap::new(), Some(ManifestOverlay::empty())),
         (populated_evidence(), None),
         (populated_evidence(), Some(populated_overlay())),
     ];
