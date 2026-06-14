@@ -42,7 +42,8 @@ fn section_missing_from_nonexistent_file_returns_section_missing_error() {
 #[test]
 fn section_missing_from_unrecognized_bytes_returns_section_missing_error() {
     let mut tmp = NamedTempFile::new().unwrap();
-    tmp.write_all(b"this is not a valid ELF Mach-O or PE binary").unwrap();
+    tmp.write_all(b"this is not a valid ELF Mach-O or PE binary")
+        .unwrap();
     let result = bsuite_core::verify_tier_evidence(tmp.path(), "T1");
     assert!(
         matches!(result, Err(BsuiteCoreError::OpacitySectionMissing(_))),

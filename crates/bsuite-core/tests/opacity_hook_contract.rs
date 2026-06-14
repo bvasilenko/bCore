@@ -35,7 +35,10 @@ fn tier_evidence_preserves_fields() {
     let evidence = sample_evidence();
     assert_eq!(evidence.schema_version, 1);
     assert_eq!(evidence.tier_id, "release");
-    assert_eq!(evidence.build_sha, "abc123def456abc123def456abc123def456abc123");
+    assert_eq!(
+        evidence.build_sha,
+        "abc123def456abc123def456abc123def456abc123"
+    );
     assert_eq!(evidence.signing_key_id, "signing-key-01");
     assert_eq!(evidence.probes.bogus_control_flow_blocks, 143);
 }

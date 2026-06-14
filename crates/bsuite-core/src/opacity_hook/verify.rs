@@ -46,9 +46,8 @@ pub fn validate_tier_evidence_toml(
 }
 
 fn extract_section(bytes: &[u8], path_display: &str) -> Result<Vec<u8>, BsuiteCoreError> {
-    let object = Object::parse(bytes).map_err(|e| {
-        BsuiteCoreError::OpacitySectionMissing(format!("{path_display}: {e}"))
-    })?;
+    let object = Object::parse(bytes)
+        .map_err(|e| BsuiteCoreError::OpacitySectionMissing(format!("{path_display}: {e}")))?;
     match object {
         Object::Elf(elf) => extract_elf_section(bytes, &elf),
         Object::Mach(Mach::Binary(macho)) => extract_macho_section(&macho),
@@ -60,10 +59,7 @@ fn extract_section(bytes: &[u8], path_display: &str) -> Result<Vec<u8>, BsuiteCo
     }
 }
 
-fn extract_elf_section(
-    bytes: &[u8],
-    elf: &goblin::elf::Elf,
-) -> Result<Vec<u8>, BsuiteCoreError> {
+fn extract_elf_section(bytes: &[u8], elf: &goblin::elf::Elf) -> Result<Vec<u8>, BsuiteCoreError> {
     for sh in &elf.section_headers {
         if elf.shdr_strtab.get_at(sh.sh_name) == Some(OPACITY_SECTION_ELF) {
             let start = sh.sh_offset as usize;
@@ -115,10 +111,7 @@ fn extract_fat_macho_section(multi: &MultiArch) -> Result<Vec<u8>, BsuiteCoreErr
     ))
 }
 
-fn extract_pe_section(
-    bytes: &[u8],
-    pe: &goblin::pe::PE,
-) -> Result<Vec<u8>, BsuiteCoreError> {
+fn extract_pe_section(bytes: &[u8], pe: &goblin::pe::PE) -> Result<Vec<u8>, BsuiteCoreError> {
     for section in &pe.sections {
         if pe_resolved_name(section) == OPACITY_SECTION_PE {
             let start = section.pointer_to_raw_data as usize;

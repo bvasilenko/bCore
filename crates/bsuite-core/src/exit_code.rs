@@ -2,8 +2,8 @@ use std::io::Write;
 
 use serde::Serialize;
 
-use crate::BsuiteCoreError;
 use crate::prompt_resolver::DirectiveString;
+use crate::BsuiteCoreError;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum ExitCode {
