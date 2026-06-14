@@ -319,6 +319,10 @@ pub fn all_bsuite_core_error_variants() -> Vec<BsuiteCoreError> {
         BsuiteCoreError::CorpusDeserializationFailed("x".into()),
         BsuiteCoreError::CorpusKeyMissing(RoutingKey::BGround),
         BsuiteCoreError::ManifestOverlay(OverlayValidationError::SignatureMissing),
+        BsuiteCoreError::OpacitySectionMissing("x".into()),
+        BsuiteCoreError::OpacityTomlParseFailed("x".into()),
+        BsuiteCoreError::OpacityTierMismatch { expected: "a".into(), found: "b".into() },
+        BsuiteCoreError::OpacitySchemaMismatch { expected: 1, found: 2 },
     ]
 }
 

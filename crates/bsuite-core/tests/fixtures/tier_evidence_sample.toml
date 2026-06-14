@@ -1,0 +1,11 @@
+schema_version = 1
+tier_id = "T1"
+build_sha = "aabbccdd00112233445566778899aabbccdd001122334455667788"
+signing_key_id = "test-key-01"
+
+[probes]
+control_flow_flattening_density = 0.87
+instruction_substitution_coverage = 0.72
+bogus_control_flow_blocks = 143
+basic_block_splitting_ratio = 1.24
+anti_debug_heuristic_score = 0.95

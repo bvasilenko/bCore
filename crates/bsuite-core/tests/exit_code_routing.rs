@@ -49,6 +49,10 @@ fn all_internal_error_variants() -> Vec<BsuiteCoreError> {
         },
         BsuiteCoreError::CorpusDeserializationFailed("x".into()),
         BsuiteCoreError::CorpusKeyMissing(RoutingKey::BGround),
+        BsuiteCoreError::OpacitySectionMissing("x".into()),
+        BsuiteCoreError::OpacityTomlParseFailed("x".into()),
+        BsuiteCoreError::OpacityTierMismatch { expected: "a".into(), found: "b".into() },
+        BsuiteCoreError::OpacitySchemaMismatch { expected: 1, found: 2 },
     ]
 }
 
@@ -169,6 +173,8 @@ proptest! {
             BsuiteCoreError::VisibilityEvidence(msg.clone()),
             BsuiteCoreError::AdapterHostBinding(msg.clone()),
             BsuiteCoreError::CorpusDeserializationFailed(msg.clone()),
+            BsuiteCoreError::OpacitySectionMissing(msg.clone()),
+            BsuiteCoreError::OpacityTomlParseFailed(msg.clone()),
         ];
         for err in variants {
             assert_eq!(route(err), ExitCode::InternalError);
