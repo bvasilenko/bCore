@@ -3,7 +3,7 @@ members = ["crates/bsuite-core"]
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0-alpha.5"
+version = "0.2.0-alpha.6"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/bvasilenko/bsuite-core"
@@ -14,6 +14,7 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 directories = "5"
 ed25519-dalek = "2"
+goblin = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_json_canonicalizer = "0.3.2"

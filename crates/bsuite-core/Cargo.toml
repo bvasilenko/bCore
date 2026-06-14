@@ -7,11 +7,15 @@ description = "Shared types and helpers that the b-* command-line prompt-lookup 
 repository.workspace = true
 readme = "../../README.md"
 
+[features]
+verify = ["dep:goblin"]
+
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
 directories.workspace = true
 ed25519-dalek.workspace = true
+goblin = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_json_canonicalizer.workspace = true
