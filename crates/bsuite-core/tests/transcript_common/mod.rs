@@ -1,6 +1,10 @@
 use bsuite_core::{HostContext, RoutingKey, TranscriptRecord};
-use chrono::{TimeZone, Utc};
+use chrono::Utc;
 use serde_json::{Value, json};
+
+pub fn today_manifest_name() -> String {
+    format!("manifest-{}.txt", Utc::now().format("%Y-%m-%d"))
+}
 
 pub fn transcript_record(invocation_id: impl Into<String>) -> TranscriptRecord {
     transcript_record_for(
@@ -22,7 +26,7 @@ pub fn transcript_record_for(
         binary_name: routing_key.stable_name().to_string(),
         binary_version: "0.2.0-alpha.3".to_string(),
         invocation_id: invocation_id.into(),
-        timestamp: Utc.with_ymd_and_hms(2026, 6, 13, 12, 0, 0).unwrap(),
+        timestamp: Utc::now(),
         routing_key,
         host_context,
         exit_code: 0,

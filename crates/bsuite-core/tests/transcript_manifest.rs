@@ -3,7 +3,7 @@ mod transcript_common;
 use bsuite_core::{FileSystemTranscriptAppender, TranscriptAppender};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use transcript_common::transcript_record;
+use transcript_common::{today_manifest_name, transcript_record};
 
 #[test]
 fn manifest_exists_after_first_append() {
@@ -13,7 +13,7 @@ fn manifest_exists_after_first_append() {
 
     appender.append(&transcript_record("first")).unwrap();
 
-    assert!(base.join("manifest-2026-06-13.txt").is_file());
+    assert!(base.join(today_manifest_name()).is_file());
 }
 
 #[test]
@@ -25,7 +25,7 @@ fn manifest_is_recomputed_after_second_append_with_matching_hashes() {
     appender.append(&transcript_record("first")).unwrap();
     appender.append(&transcript_record("second")).unwrap();
 
-    let manifest = std::fs::read_to_string(base.join("manifest-2026-06-13.txt")).unwrap();
+    let manifest = std::fs::read_to_string(base.join(today_manifest_name())).unwrap();
     let entries = manifest
         .lines()
         .map(|line| {

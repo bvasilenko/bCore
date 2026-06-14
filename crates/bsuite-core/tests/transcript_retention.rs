@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
-use transcript_common::transcript_record;
+use transcript_common::{today_manifest_name, transcript_record};
 use ulid::Ulid;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -33,7 +33,7 @@ fn retention_removes_expired_owned_files_and_preserves_fresh_and_unrelated_files
     assert!(!old_path.exists());
     assert!(fresh_path.exists());
     assert!(unrelated_path.exists());
-    let manifest = fs::read_to_string(base.join("manifest-2026-06-13.txt")).unwrap();
+    let manifest = fs::read_to_string(base.join(today_manifest_name())).unwrap();
     assert!(!manifest.contains("not-owned.txt"));
 }
 
