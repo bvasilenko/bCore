@@ -9,7 +9,11 @@ pub mod routing_key;
 pub mod transcript_writer;
 pub mod upgrade_carrier;
 
-pub use adapter_host_bind::{AdapterBinding, AdapterHostBinder, HostContext};
+pub use adapter_host_bind::{
+    AdapterBinding, AdapterHostBinder, FullAdapterHostBinder, HOST_CONTEXT_ENV_VAR, HostContext,
+    HostInvocationContext, format_context_tag, parse_host_invocation_context,
+    parse_host_invocation_context_from_env,
+};
 pub use corpus::{CorpusEntry, CorpusFile, ProvenanceRecord};
 pub use error::BsuiteCoreError;
 pub use exit_code::{EmitFormat, ExitCode, ExitCodeEmitter, ExitCodeRouting, ProcessExitEmitter};
