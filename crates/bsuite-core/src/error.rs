@@ -71,4 +71,8 @@ pub enum BsuiteCoreError {
     OpacityTierMismatch { expected: String, found: String },
     #[error("opacity schema mismatch: expected {expected}, found {found}")]
     OpacitySchemaMismatch { expected: u32, found: u32 },
+    #[error("host context JSON in BSUITE_HOST_CONTEXT could not be parsed: {0}")]
+    HostContextParseFailed(String),
+    #[error("host_id is not a recognized host context identifier: {0}")]
+    UnknownHostId(String),
 }

@@ -86,7 +86,9 @@ impl ExitCodeRouting for BsuiteCoreError {
             | BsuiteCoreError::OpacitySectionMissing(_)
             | BsuiteCoreError::OpacityTomlParseFailed(_)
             | BsuiteCoreError::OpacityTierMismatch { .. }
-            | BsuiteCoreError::OpacitySchemaMismatch { .. } => ExitCode::InternalError,
+            | BsuiteCoreError::OpacitySchemaMismatch { .. }
+            | BsuiteCoreError::HostContextParseFailed(_)
+            | BsuiteCoreError::UnknownHostId(_) => ExitCode::InternalError,
         }
     }
 }
@@ -238,5 +240,7 @@ fn error_variant_name(err: &BsuiteCoreError) -> &'static str {
         BsuiteCoreError::OpacityTomlParseFailed(_) => "OpacityTomlParseFailed",
         BsuiteCoreError::OpacityTierMismatch { .. } => "OpacityTierMismatch",
         BsuiteCoreError::OpacitySchemaMismatch { .. } => "OpacitySchemaMismatch",
+        BsuiteCoreError::HostContextParseFailed(_) => "HostContextParseFailed",
+        BsuiteCoreError::UnknownHostId(_) => "UnknownHostId",
     }
 }
