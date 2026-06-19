@@ -59,6 +59,8 @@ fn all_internal_error_variants() -> Vec<BsuiteCoreError> {
             expected: 1,
             found: 2,
         },
+        BsuiteCoreError::HostContextParseFailed("x".into()),
+        BsuiteCoreError::UnknownHostId("unknown-cms-v99".into()),
     ]
 }
 
@@ -181,6 +183,8 @@ proptest! {
             BsuiteCoreError::CorpusDeserializationFailed(msg.clone()),
             BsuiteCoreError::OpacitySectionMissing(msg.clone()),
             BsuiteCoreError::OpacityTomlParseFailed(msg.clone()),
+            BsuiteCoreError::HostContextParseFailed(msg.clone()),
+            BsuiteCoreError::UnknownHostId(msg.clone()),
         ];
         for err in variants {
             assert_eq!(route(err), ExitCode::InternalError);

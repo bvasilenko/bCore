@@ -329,6 +329,8 @@ pub fn all_bsuite_core_error_variants() -> Vec<BsuiteCoreError> {
             expected: 1,
             found: 2,
         },
+        BsuiteCoreError::HostContextParseFailed("x".into()),
+        BsuiteCoreError::UnknownHostId("unknown-cms-v99".into()),
     ]
 }
 
