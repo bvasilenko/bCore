@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use goblin::mach::{Mach, MachO, MultiArch, SingleArch};
 use goblin::Object;
+use goblin::mach::{Mach, MachO, MultiArch, SingleArch};
 
 use crate::BsuiteCoreError;
 
 use super::section::{OPACITY_SECTION_ELF, OPACITY_SECTION_PE};
-use super::types::{TierEvidence, SCHEMA_VERSION};
+use super::types::{SCHEMA_VERSION, TierEvidence};
 
 const MACHO_SEGNAME: &str = "__DATA";
 const MACHO_SECTNAME: &str = "__BSUITE_OPACITY";

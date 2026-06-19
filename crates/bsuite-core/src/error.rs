@@ -1,5 +1,5 @@
-use crate::manifest_overlay::OverlayValidationError;
 use crate::RoutingKey;
+use crate::manifest_overlay::OverlayValidationError;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]

@@ -36,8 +36,8 @@ pub fn assert_projection_contains<T, U, const N: usize>(
 
 use base64::Engine;
 use bsuite_core::{
-    corpus::canonical_payload_bytes, CorpusEntry, CorpusFile, CorpusResolver, ProvenanceRecord,
-    RoutingKey,
+    CorpusEntry, CorpusFile, CorpusResolver, ProvenanceRecord, RoutingKey,
+    corpus::canonical_payload_bytes,
 };
 use ed25519_dalek::{Signer, SigningKey};
 

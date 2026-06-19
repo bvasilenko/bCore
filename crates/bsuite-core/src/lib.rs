@@ -18,8 +18,8 @@ pub use manifest_overlay::{
     ManifestOverlayReader, OVERLAY_SCHEMA_VERSION, OverlayValidationError, OverrideMap,
 };
 pub use opacity_hook::{
-    OpacityHookPublisher, TierEvidence, TierProbes,
-    OPACITY_SECTION_ELF, OPACITY_SECTION_MACHO, OPACITY_SECTION_PE,
+    OPACITY_SECTION_ELF, OPACITY_SECTION_MACHO, OPACITY_SECTION_PE, OpacityHookPublisher,
+    TierEvidence, TierProbes,
 };
 #[cfg(feature = "verify")]
 pub use opacity_hook::{validate_tier_evidence_toml, verify_tier_evidence};
